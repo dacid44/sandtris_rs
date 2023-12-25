@@ -1,5 +1,6 @@
 mod canvas;
 mod game;
+mod blocks;
 
 use piston_window::prelude::*;
 

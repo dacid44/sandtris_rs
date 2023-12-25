@@ -9,6 +9,8 @@ edition = "2021"
 derivative = "2.2.0"
 enum-map = "2.7.3"
 image = { version = "0.24.7", default-features = false }
+imageproc = "0.23.0"
+lazy_static = "1.4.0"
 nanorand = "0.7.0"
 ndarray = "0.15.6"
 # piston = "0.55.0"
