@@ -1,9 +1,11 @@
 use crate::canvas::Canvas;
+use crate::constants::*;
 use enum_map::EnumMap;
 use image::Rgba;
 use imageproc::drawing;
 use imageproc::rect::Rect;
 use nanorand::Rng;
+use nanorand::WyRand;
 use ndarray::s;
 use ndarray::Array;
 use ndarray::Array2;
@@ -12,39 +14,38 @@ use piston_window::prelude::*;
 
 #[derive(Debug)]
 pub struct Game {
+    rng: WyRand,
     canvas: Canvas,
     sand: Array2<bool>,
     elapsed_time: f64,
     next_move: f64,
     next_physics_update: f64,
     control_updates: EnumMap<Direction, Option<f64>>,
-    falling_block_pos: Option<(usize, usize)>,
+    falling_block_pos: Option<(usize, usize, Block)>,
 }
 
 impl Game {
-    const BLOCK_SIZE: usize = 32;
-    const SAND_SIZE: usize = 2;
-    const SAND_BLOCK_SIZE: usize = Self::BLOCK_SIZE / Self::SAND_SIZE;
-    const CLEAR_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-    const MOVE_DELAY: f64 = 1.0 / 6.0;
-    const FIRST_INPUT_DELAY: f64 = 0.1;
-    const INPUT_DELAY: f64 = 1.0 / 60.0;
-    const MOVE_REPEAT: usize = 2;
-    const PHYSICS_DELAY: f64 = 1.0 / 60.0;
-
     pub fn new(window: &mut PistonWindow) -> Self {
         Self {
+            rng: WyRand::new(),
             canvas: Canvas::new(window),
             sand: Array2::default([
-                window.size().width as usize / Self::SAND_SIZE,
-                window.size().height as usize / Self::SAND_SIZE,
+                window.size().width as usize / SAND_SIZE,
+                window.size().height as usize / SAND_SIZE,
             ]),
             elapsed_time: 0.0,
-            next_move: Self::MOVE_DELAY,
+            next_move: MOVE_DELAY,
             next_physics_update: 0.0,
             control_updates: Default::default(),
             falling_block_pos: None,
         }
+    }
+
+    fn reset(&mut self) {
+        self.sand.assign(&Array::from_elem(1, false));
+        self.next_move = self.elapsed_time + MOVE_DELAY;
+        self.next_physics_update = self.elapsed_time;
+        self.falling_block_pos = None;
     }
 
     pub fn handle_event(&mut self, event: &Event) {
@@ -54,17 +55,17 @@ impl Game {
                     Key::Left => {
                         self.move_block(Direction::Left);
                         self.control_updates[Direction::Left] =
-                            Some(self.elapsed_time + Self::FIRST_INPUT_DELAY);
+                            Some(self.elapsed_time + FIRST_INPUT_DELAY);
                     }
                     Key::Right => {
                         self.move_block(Direction::Right);
                         self.control_updates[Direction::Right] =
-                            Some(self.elapsed_time + Self::FIRST_INPUT_DELAY);
+                            Some(self.elapsed_time + FIRST_INPUT_DELAY);
                     }
                     Key::Down => {
                         self.move_block(Direction::Down);
                         self.control_updates[Direction::Down] =
-                            Some(self.elapsed_time + Self::FIRST_INPUT_DELAY);
+                            Some(self.elapsed_time + FIRST_INPUT_DELAY);
                     }
                     _ => {}
                 },
@@ -83,6 +84,9 @@ impl Game {
                     Key::Down => {
                         self.control_updates[Direction::Down] = None;
                     }
+                    Key::R => {
+                        self.reset();
+                    }
                     _ => {}
                 },
                 _ => {}
@@ -91,30 +95,32 @@ impl Game {
     }
 
     fn move_block(&mut self, direction: Direction) {
-        for _ in 0..Self::MOVE_REPEAT {
+        for _ in 0..MOVE_REPEAT {
             match direction {
                 Direction::Left => {
-                    if let Some((x, _)) = self.falling_block_pos.as_mut().filter(|pos| pos.0 > 0) {
-                        *x -= 1;
+                    if let Some((x, y, block)) = self
+                        .falling_block_pos
+                        .filter(|_| self.can_move(Direction::Left))
+                    {
+                        self.falling_block_pos = Some((x - 1, y, block));
                     }
                 }
                 Direction::Right => {
-                    if let Some((x, _)) = self
+                    if let Some((x, y, block)) = self
                         .falling_block_pos
-                        .as_mut()
-                        .filter(|pos| pos.0 < self.sand.dim().0 - Self::SAND_BLOCK_SIZE)
+                        .filter(|_| self.can_move(Direction::Right))
                     {
-                        *x += 1;
+                        self.falling_block_pos = Some((x + 1, y, block));
                     }
                 }
                 Direction::Down => {
-                    if let Some((x, y)) = self.falling_block_pos {
-                        if self.is_block_settled() {
-                            self.add_sand_block(x, y);
+                    if let Some((x, y, block)) = self.falling_block_pos {
+                        if self.can_move(Direction::Down) {
+                            self.falling_block_pos = Some((x, y + 1, block))
+                        } else {
+                            self.add_sand_block();
                             self.falling_block_pos = None;
                             break;
-                        } else {
-                            self.falling_block_pos = Some((x, y + 1))
                         }
                     }
                 }
@@ -128,7 +134,7 @@ impl Game {
         self.control_updates = self.control_updates.map(|input, update| {
             if let Some(update) = update.filter(|update| self.elapsed_time >= *update) {
                 self.move_block(input);
-                Some(update + Self::INPUT_DELAY)
+                Some(update + INPUT_DELAY)
             } else {
                 update
             }
@@ -136,18 +142,22 @@ impl Game {
 
         if self.elapsed_time >= self.next_physics_update {
             self.run_sand_physics();
-            self.next_physics_update += Self::PHYSICS_DELAY;
+            self.next_physics_update += PHYSICS_DELAY;
         }
 
         if self.elapsed_time >= self.next_move {
-            if let Some((x, y)) = self.falling_block_pos {
+            if self.falling_block_pos.is_some() {
                 if self.control_updates[Direction::Down].is_none() {
                     self.move_block(Direction::Down);
                 }
             } else {
-                self.falling_block_pos = Some((self.sand.dim().0 / 2, 0));
+                self.falling_block_pos = Some((
+                    self.sand.dim().0 / 2 - 1,
+                    0,
+                    Block::BLOCKS[self.rng.generate_range(0..Block::BLOCKS.len())],
+                ));
             }
-            self.next_move += Self::MOVE_DELAY;
+            self.next_move += MOVE_DELAY;
         }
     }
 
@@ -159,17 +169,29 @@ impl Game {
     }
 
     fn can_move(&self, direction: Direction) -> bool {
-        if let Some((x, y)) = self.falling_block_pos {
+        if let Some((x, y, block)) = self.falling_block_pos {
             match direction {
                 Direction::Left => {
-                    true
+                    // TODO: Check sand
+                    x > 0 && block.coords(x, y).all(|(px, py)| {
+                        self.sand.slice(s![px - 1, py..py + SAND_BLOCK_SIZE]).iter().all(|s| !s)
+                    })
                 }
                 Direction::Right => {
-                    true
+                    // TODO: Check sand
+                    x < self.sand.dim().0 - (SAND_BLOCK_SIZE * block.shape().dim().0)
+                        && block.coords(x, y).all(|(px, py)| {
+                        self.sand.slice(s![px + SAND_BLOCK_SIZE, py..py + SAND_BLOCK_SIZE]).iter().all(|s| !s)
+                    })
                 }
                 Direction::Down => {
-                    y < self.sand.dim().1 - Self::SAND_BLOCK_SIZE
-                        && self.sand.slice(s![x..x + Self::SAND_BLOCK_SIZE, y + Self::SAND_BLOCK_SIZE]).iter().all(|s| !s)
+                    y < self.sand.dim().1 - (SAND_BLOCK_SIZE * block.shape().dim().1)
+                        && block.coords(x, y).all(|(px, py)| {
+                            self.sand
+                                .slice(s![px..px + SAND_BLOCK_SIZE, py + SAND_BLOCK_SIZE])
+                                .iter()
+                                .all(|s| !s)
+                        })
                 }
             }
         } else {
@@ -177,13 +199,14 @@ impl Game {
         }
     }
 
-    fn add_sand_block(&mut self, x: usize, y: usize) {
-        self.sand
-            .slice_mut(s![
-                x..x + (Self::SAND_BLOCK_SIZE),
-                y..y + (Self::SAND_BLOCK_SIZE)
-            ])
-            .assign(&Array::from_elem(1, true));
+    fn add_sand_block(&mut self) {
+        if let Some((x, y, block)) = self.falling_block_pos {
+            for (px, py) in block.coords(x, y) {
+                self.sand
+                    .slice_mut(s![px..px + SAND_BLOCK_SIZE, py..py + SAND_BLOCK_SIZE])
+                    .assign(&Array::from_elem(1, true));
+            }
+        }
     }
 
     fn run_sand_physics(&mut self) {
@@ -239,7 +262,7 @@ impl Game {
         graphics::rectangle_from_to(
             color,
             [x, y],
-            [x + Self::BLOCK_SIZE as f64, y + Self::BLOCK_SIZE as f64],
+            [x + BLOCK_SIZE as f64, y + BLOCK_SIZE as f64],
             context.transform,
             g,
         );
@@ -249,13 +272,13 @@ impl Game {
         self.canvas.clear(Rgba([255, 255, 255, 255]));
         let buffer = self.canvas.image();
 
-        graphics::clear(Self::CLEAR_COLOR, g);
+        graphics::clear(CLEAR_COLOR, g);
         for ((x, y), _) in self.sand.indexed_iter().filter(|(_, pixel)| **pixel) {
             // buffer.put_pixel(x as u32, y as u32, Rgba([0, 255, 0, 255]));
             drawing::draw_filled_rect_mut(
                 buffer,
-                Rect::at((x * Self::SAND_SIZE) as i32, (y * Self::SAND_SIZE) as i32)
-                    .of_size(Self::SAND_SIZE as u32, Self::SAND_SIZE as u32),
+                Rect::at((x * SAND_SIZE) as i32, (y * SAND_SIZE) as i32)
+                    .of_size(SAND_SIZE as u32, SAND_SIZE as u32),
                 Rgba([0, 255, 0, 255]),
             );
         }
@@ -265,14 +288,16 @@ impl Game {
         //     self.draw_block(x, y, [1.0, 0.0, 0.0, 1.0], context, g);
         // }
 
-        if let Some((x, y)) = self.falling_block_pos {
-            self.draw_block(
-                x * Self::SAND_SIZE,
-                y * Self::SAND_SIZE,
-                [0.0, 0.0, 1.0, 1.0],
-                context,
-                g,
-            );
+        if let Some((x, y, block)) = self.falling_block_pos {
+            for (px, py) in block.coords(x, y) {
+                self.draw_block(
+                    px * SAND_SIZE,
+                    py * SAND_SIZE,
+                    [0.0, 0.0, 1.0, 1.0],
+                    context,
+                    g,
+                );
+            }
         }
     }
 }
