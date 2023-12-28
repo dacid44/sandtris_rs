@@ -4,6 +4,7 @@ use enum_map::EnumMap;
 use image::Rgba;
 use imageproc::drawing;
 use imageproc::rect::Rect;
+use nanorand::RandomGen;
 use nanorand::Rng;
 use nanorand::WyRand;
 use ndarray::s;
@@ -16,12 +17,12 @@ use piston_window::prelude::*;
 pub struct Game {
     rng: WyRand,
     canvas: Canvas,
-    sand: Array2<bool>,
+    sand: Array2<Option<Color>>,
     elapsed_time: f64,
     next_move: f64,
     next_physics_update: f64,
     control_updates: EnumMap<Direction, Option<f64>>,
-    falling_block_pos: Option<(usize, usize, Block)>,
+    falling_block_pos: Option<Block>,
 }
 
 impl Game {
@@ -42,7 +43,7 @@ impl Game {
     }
 
     fn reset(&mut self) {
-        self.sand.assign(&Array::from_elem(1, false));
+        self.sand.assign(&Array::from_elem(1, None));
         self.next_move = self.elapsed_time + MOVE_DELAY;
         self.next_physics_update = self.elapsed_time;
         self.falling_block_pos = None;
@@ -98,25 +99,25 @@ impl Game {
         for _ in 0..MOVE_REPEAT {
             match direction {
                 Direction::Left => {
-                    if let Some((x, y, block)) = self
+                    if let Some(block) = self
                         .falling_block_pos
                         .filter(|_| self.can_move(Direction::Left))
                     {
-                        self.falling_block_pos = Some((x - 1, y, block));
+                        self.falling_block_pos = Some(block.dec_x());
                     }
                 }
                 Direction::Right => {
-                    if let Some((x, y, block)) = self
+                    if let Some(block) = self
                         .falling_block_pos
                         .filter(|_| self.can_move(Direction::Right))
                     {
-                        self.falling_block_pos = Some((x + 1, y, block));
+                        self.falling_block_pos = Some(block.inc_x());
                     }
                 }
                 Direction::Down => {
-                    if let Some((x, y, block)) = self.falling_block_pos {
+                    if let Some(block) = self.falling_block_pos {
                         if self.can_move(Direction::Down) {
-                            self.falling_block_pos = Some((x, y + 1, block))
+                            self.falling_block_pos = Some(block.inc_y())
                         } else {
                             self.add_sand_block();
                             self.falling_block_pos = None;
@@ -151,46 +152,46 @@ impl Game {
                     self.move_block(Direction::Down);
                 }
             } else {
-                self.falling_block_pos = Some((
-                    self.sand.dim().0 / 2 - 1,
-                    0,
-                    Block::BLOCKS[self.rng.generate_range(0..Block::BLOCKS.len())],
-                ));
+                self.falling_block_pos = Some(
+                    self.rng
+                        .generate::<Block>()
+                        .with_pos(self.sand.dim().0 / 2 - 1, 0),
+                );
             }
             self.next_move += MOVE_DELAY;
         }
     }
 
-    fn is_block_settled(&self) -> bool {
-        // self.falling_block_pos
-        //     .map(|(x, y)| y + Self::SAND_BLOCK_SIZE == self.sand.dim().1)
-        //     .unwrap_or(false)
-        !self.can_move(Direction::Down)
-    }
-
     fn can_move(&self, direction: Direction) -> bool {
-        if let Some((x, y, block)) = self.falling_block_pos {
+        if let Some(block) = self.falling_block_pos {
             match direction {
                 Direction::Left => {
                     // TODO: Check sand
-                    x > 0 && block.coords(x, y).all(|(px, py)| {
-                        self.sand.slice(s![px - 1, py..py + SAND_BLOCK_SIZE]).iter().all(|s| !s)
-                    })
+                    block.x > 0
+                        && block.coords().all(|(px, py)| {
+                            self.sand
+                                .slice(s![px - 1, py..py + SAND_BLOCK_SIZE])
+                                .iter()
+                                .all(Option::is_none)
+                        })
                 }
                 Direction::Right => {
                     // TODO: Check sand
-                    x < self.sand.dim().0 - (SAND_BLOCK_SIZE * block.shape().dim().0)
-                        && block.coords(x, y).all(|(px, py)| {
-                        self.sand.slice(s![px + SAND_BLOCK_SIZE, py..py + SAND_BLOCK_SIZE]).iter().all(|s| !s)
-                    })
+                    block.x < self.sand.dim().0 - (SAND_BLOCK_SIZE * block.width())
+                        && block.coords().all(|(px, py)| {
+                            self.sand
+                                .slice(s![px + SAND_BLOCK_SIZE, py..py + SAND_BLOCK_SIZE])
+                                .iter()
+                                .all(Option::is_none)
+                        })
                 }
                 Direction::Down => {
-                    y < self.sand.dim().1 - (SAND_BLOCK_SIZE * block.shape().dim().1)
-                        && block.coords(x, y).all(|(px, py)| {
+                    block.y < self.sand.dim().1 - (SAND_BLOCK_SIZE * block.height())
+                        && block.coords().all(|(px, py)| {
                             self.sand
                                 .slice(s![px..px + SAND_BLOCK_SIZE, py + SAND_BLOCK_SIZE])
                                 .iter()
-                                .all(|s| !s)
+                                .all(Option::is_none)
                         })
                 }
             }
@@ -200,50 +201,51 @@ impl Game {
     }
 
     fn add_sand_block(&mut self) {
-        if let Some((x, y, block)) = self.falling_block_pos {
-            for (px, py) in block.coords(x, y) {
+        if let Some(block) = self.falling_block_pos {
+            for (px, py) in block.coords() {
                 self.sand
                     .slice_mut(s![px..px + SAND_BLOCK_SIZE, py..py + SAND_BLOCK_SIZE])
-                    .assign(&Array::from_elem(1, true));
+                    .assign(&Array::from_elem(1, Some(block.color)));
             }
         }
     }
 
     fn run_sand_physics(&mut self) {
+        let last_sand = self.sand.clone();
         // The bottom line will not move so we can skip it, and not worry about the bottom edge
         // case
         for y in (0..self.sand.dim().1 - 1).rev() {
             for x in 0..self.sand.dim().0 {
-                if !self.sand[[x, y]] {
+                if self.sand[[x, y]].is_none() {
                     continue;
                 }
 
                 // Check directly below
-                if !self.sand[[x, y + 1]] {
-                    self.sand[[x, y + 1]] = true;
-                    self.sand[[x, y]] = false;
+                if self.sand[[x, y + 1]].is_none() {
+                    self.sand[[x, y + 1]] = self.sand[[x, y]];
+                    self.sand[[x, y]] = None;
                     continue;
                 }
             }
 
             for x in 0..self.sand.dim().0 {
-                if !self.sand[[x, y]] {
+                if self.sand[[x, y]].is_none() {
                     continue;
                 }
 
                 // TODO: Make which direction the sand actually goes randomly decided
 
                 // Check bottom left
-                if x > 0 && !self.sand[[x - 1, y + 1]] {
-                    self.sand[[x - 1, y + 1]] = true;
-                    self.sand[[x, y]] = false;
+                if x > 0 && self.sand[[x - 1, y + 1]].is_none() {
+                    self.sand[[x - 1, y + 1]] = self.sand[[x, y]];
+                    self.sand[[x, y]] = None;
                     continue;
                 }
 
                 // Check bottom right
-                if x < self.sand.dim().0 - 1 && !self.sand[[x + 1, y + 1]] {
-                    self.sand[[x + 1, y + 1]] = true;
-                    self.sand[[x, y]] = false;
+                if x < self.sand.dim().0 - 1 && self.sand[[x + 1, y + 1]].is_none() {
+                    self.sand[[x + 1, y + 1]] = self.sand[[x, y]];
+                    self.sand[[x, y]] = None;
                     continue;
                 }
             }
@@ -273,13 +275,13 @@ impl Game {
         let buffer = self.canvas.image();
 
         graphics::clear(CLEAR_COLOR, g);
-        for ((x, y), _) in self.sand.indexed_iter().filter(|(_, pixel)| **pixel) {
+        for ((x, y), color) in self.sand.indexed_iter().filter_map(|(pos, pixel)| pixel.map(|p| (pos, p))) {
             // buffer.put_pixel(x as u32, y as u32, Rgba([0, 255, 0, 255]));
             drawing::draw_filled_rect_mut(
                 buffer,
                 Rect::at((x * SAND_SIZE) as i32, (y * SAND_SIZE) as i32)
                     .of_size(SAND_SIZE as u32, SAND_SIZE as u32),
-                Rgba([0, 255, 0, 255]),
+                color.pixel_color(),
             );
         }
         self.canvas.render(context, g);
@@ -288,30 +290,109 @@ impl Game {
         //     self.draw_block(x, y, [1.0, 0.0, 0.0, 1.0], context, g);
         // }
 
-        if let Some((x, y, block)) = self.falling_block_pos {
-            for (px, py) in block.coords(x, y) {
-                self.draw_block(
-                    px * SAND_SIZE,
-                    py * SAND_SIZE,
-                    [0.0, 0.0, 1.0, 1.0],
-                    context,
-                    g,
-                );
-            }
+        if let Some(block) = self.falling_block_pos {
+            block.render(context, g);
         }
     }
 }
 
-// #[derive(Debug, Default)]
-// struct ControlUpdates {
-//     left: Option<f64>,
-//     right: Option<f64>,
-//     down: Option<f64>,
-// }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Color {
+    Red,
+    Yellow,
+    Blue,
+    Green,
+}
 
-#[derive(Debug, PartialEq, Eq, enum_map::Enum)]
-enum Direction {
-    Left,
-    Right,
-    Down,
+impl Color {
+    fn pixel_color(&self) -> Rgba<u8> {
+        Rgba(match self {
+            Color::Red => [255, 0, 0, 255],
+            Color::Yellow => [255, 255, 0, 255],
+            Color::Blue => [0, 0, 255, 255],
+            Color::Green => [0, 255, 0, 255],
+        })
+    }
+
+    fn float_color(&self) -> [f32; 4] {
+        match self {
+            Color::Red => [1.0, 0.0, 0.0, 1.0],
+            Color::Yellow => [1.0, 1.0, 0.0, 1.0],
+            Color::Blue => [0.0, 0.0, 1.0, 1.0],
+            Color::Green => [0.0, 1.0, 0.0, 1.0],
+        }
+    }
+}
+
+impl<Generator: Rng<OUTPUT>, const OUTPUT: usize> RandomGen<Generator, OUTPUT> for Color {
+    fn random(rng: &mut Generator) -> Self {
+        [Color::Red, Color::Yellow, Color::Blue, Color::Green][rng.generate_range(0..4)]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Block {
+    x: usize,
+    y: usize,
+    shape: Shape,
+    color: Color,
+}
+
+impl Block {
+    fn with_pos(mut self, x: usize, y: usize) -> Self {
+        self.x = x;
+        self.y = y;
+        self
+    }
+
+    fn inc_x(mut self) -> Self {
+        self.x += 1;
+        self
+    }
+
+    fn dec_x(mut self) -> Self {
+        self.x -= 1;
+        self
+    }
+
+    fn inc_y(mut self) -> Self {
+        self.y += 1;
+        self
+    }
+
+    pub fn coords(&self) -> impl Iterator<Item = (usize, usize)> {
+        self.shape.coords(self.x, self.y)
+    }
+
+    fn width(&self) -> usize {
+        self.shape.shape().dim().0
+    }
+
+    fn height(&self) -> usize {
+        self.shape.shape().dim().1
+    }
+
+    fn render(&self, context: graphics::Context, g: &mut G2d) {
+        for (px, py) in self.coords() {
+            let (x, y) = ((px * SAND_SIZE) as f64, (py * SAND_SIZE) as f64);
+            graphics::rectangle_from_to(
+                self.color.float_color(),
+                [x, y],
+                [x + BLOCK_SIZE as f64, y + BLOCK_SIZE as f64],
+                context.transform,
+                g,
+            );
+        }
+    }
+}
+
+impl<Generator: Rng<OUTPUT>, const OUTPUT: usize> RandomGen<Generator, OUTPUT> for Block {
+    fn random(rng: &mut Generator) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            shape: rng.generate(),
+            color: rng.generate(),
+        }
+    }
 }
