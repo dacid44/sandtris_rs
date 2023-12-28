@@ -1,5 +1,7 @@
 use crate::canvas::Canvas;
 use crate::constants::*;
+use crate::pathfinding::find_connected_sand;
+use crate::pathfinding::find_spanning_group;
 use enum_map::EnumMap;
 use image::Rgba;
 use imageproc::drawing;
@@ -144,6 +146,12 @@ impl Game {
         if self.elapsed_time >= self.next_physics_update {
             self.run_sand_physics();
             self.next_physics_update += PHYSICS_DELAY;
+        }
+
+        if let Some((x, y)) = find_spanning_group(&self.sand) {
+            for (px, py) in find_connected_sand(&self.sand, x, y) {
+                self.sand[[px, py]] = None;
+            }
         }
 
         if self.elapsed_time >= self.next_move {

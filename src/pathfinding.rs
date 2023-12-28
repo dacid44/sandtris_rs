@@ -1,39 +1,31 @@
 use std::iter;
 
-use ndarray::{s, Array2, ArrayView2};
-use pathfinding::directed::astar::astar;
+use ndarray::{s, Array, Array1, Array2, ArrayView2};
+use pathfinding::directed::{astar::astar, bfs::bfs_reach};
 
 use crate::constants::Color;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Node {
     StartingEdge,
     Grid(usize, usize),
 }
 
-fn find_spanning_group(grid: &Array2<Option<Color>>) -> [usize; 2] {
-    let path = astar(
+pub fn find_spanning_group(grid: &Array2<Option<Color>>) -> Option<(usize, usize)> {
+    astar(
         &Node::StartingEdge,
-        |node| match node {
-            Node::StartingEdge => Box::new(
-                grid.slice(s![0, ..])
-                    .indexed_iter()
-                    .flat_map(|((x, y), color)| color.map(|_| (Node::Grid(x, y), 1))),
-            ),
-            Node::Grid(x, y) => {
-                let Some(color) = grid[[x, y]] else {
-                    return Box::new(iter::empty());
-                };
-                Box::new(
-                    [
-                        (x.wrapping_sub(1), *y),
-                        (*x, y.wrapping_sub(1)),
-                        (x + 1, *y),
-                        (*x, y + 1),
-                    ]
-                    .into_iter()
-                    .flat_map(|(nx, ny)| test_node(grid, nx, ny, color)),
-                )
+        |node| -> Box<dyn Iterator<Item = (Node, usize)>> {
+            match node {
+                Node::StartingEdge => Box::new(
+                    (0..grid.dim().1).filter_map(|y| grid[[0, y]].map(|_| (Node::Grid(0, y), 1))),
+                ),
+                Node::Grid(x, y) => {
+                    if let Some(color) = grid[[*x, *y]] {
+                        Box::new(find_neighbors(grid, *x, *y, color).map(|(nx, ny)| (Node::Grid(nx, ny), 1)))
+                    } else {
+                        Box::new(iter::empty())
+                    }
+                }
             }
         },
         |node| match node {
@@ -42,21 +34,46 @@ fn find_spanning_group(grid: &Array2<Option<Color>>) -> [usize; 2] {
         },
         |node| match node {
             Node::StartingEdge => false,
-            Node::Grid(x, _) => x == grid.dim().0 - 1,
+            Node::Grid(x, _) => *x == grid.dim().0 - 1,
         },
-    );
-    todo!()
+    )
+    .and_then(|path| match path.0[1] {
+        Node::StartingEdge => None,
+        Node::Grid(x, y) => Some((x, y)),
+    })
 }
 
-fn test_node(
+pub fn find_connected_sand(grid: &Array2<Option<Color>>, x: usize, y: usize) -> Vec<(usize, usize)> {
+    bfs_reach((x, y), |(x, y)| -> Box<dyn Iterator<Item=(usize, usize)>> {
+        if let Some(color) = grid[[*x, *y]] {
+            Box::new(find_neighbors(grid, *x, *y, color))
+        } else {
+            Box::new(iter::empty())
+        }
+    }).collect()
+}
+
+fn find_neighbors(
     grid: &Array2<Option<Color>>,
     x: usize,
     y: usize,
     color: Color,
-) -> Option<(Node, usize)> {
+) -> impl Iterator<Item = (usize, usize)> {
+    [
+        (x.wrapping_sub(1), y),
+        (x, y.wrapping_sub(1)),
+        (x + 1, y),
+        (x, y + 1),
+    ]
+    .map(|(nx, ny)| test_node(grid, nx, ny, color))
+    .into_iter()
+    .flatten()
+}
+
+fn test_node(grid: &Array2<Option<Color>>, x: usize, y: usize, color: Color) -> Option<(usize, usize)> {
     grid.get([x, y])
         .copied()
         .flatten()
-        .filter(|c| c == color)
-        .map(|_| (Node::Grid(x, y), 1))
+        .filter(|c| *c == color)
+        .map(|_| (x, y))
 }
