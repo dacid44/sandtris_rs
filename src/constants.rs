@@ -1,4 +1,5 @@
 use enum_map::{enum_map, Enum, EnumMap};
+use image::Rgba;
 use lazy_static::lazy_static;
 use nanorand::{Rng, RandomGen};
 use ndarray::{Array2, ArrayView2};
@@ -61,6 +62,40 @@ impl Shape {
 impl<Generator: Rng<OUTPUT>, const OUTPUT: usize> RandomGen<Generator, OUTPUT> for Shape {
     fn random(rng: &mut Generator) -> Self {
         [Shape::T, Shape::S, Shape::Z][rng.generate_range(0..3)]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Color {
+    Red,
+    Yellow,
+    Blue,
+    Green,
+}
+
+impl Color {
+    pub fn pixel_color(&self) -> Rgba<u8> {
+        Rgba(match self {
+            Color::Red => [255, 0, 0, 255],
+            Color::Yellow => [255, 255, 0, 255],
+            Color::Blue => [0, 0, 255, 255],
+            Color::Green => [0, 255, 0, 255],
+        })
+    }
+
+    pub fn float_color(&self) -> [f32; 4] {
+        match self {
+            Color::Red => [1.0, 0.0, 0.0, 1.0],
+            Color::Yellow => [1.0, 1.0, 0.0, 1.0],
+            Color::Blue => [0.0, 0.0, 1.0, 1.0],
+            Color::Green => [0.0, 1.0, 0.0, 1.0],
+        }
+    }
+}
+
+impl<Generator: Rng<OUTPUT>, const OUTPUT: usize> RandomGen<Generator, OUTPUT> for Color {
+    fn random(rng: &mut Generator) -> Self {
+        [Color::Red, Color::Yellow, Color::Blue, Color::Green][rng.generate_range(0..4)]
     }
 }
 

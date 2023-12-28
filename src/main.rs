@@ -2,6 +2,7 @@ mod canvas;
 mod constants;
 mod game;
 mod physics;
+mod pathfinding;
 
 use piston_window::prelude::*;
 

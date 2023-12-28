@@ -297,40 +297,6 @@ impl Game {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Color {
-    Red,
-    Yellow,
-    Blue,
-    Green,
-}
-
-impl Color {
-    fn pixel_color(&self) -> Rgba<u8> {
-        Rgba(match self {
-            Color::Red => [255, 0, 0, 255],
-            Color::Yellow => [255, 255, 0, 255],
-            Color::Blue => [0, 0, 255, 255],
-            Color::Green => [0, 255, 0, 255],
-        })
-    }
-
-    fn float_color(&self) -> [f32; 4] {
-        match self {
-            Color::Red => [1.0, 0.0, 0.0, 1.0],
-            Color::Yellow => [1.0, 1.0, 0.0, 1.0],
-            Color::Blue => [0.0, 0.0, 1.0, 1.0],
-            Color::Green => [0.0, 1.0, 0.0, 1.0],
-        }
-    }
-}
-
-impl<Generator: Rng<OUTPUT>, const OUTPUT: usize> RandomGen<Generator, OUTPUT> for Color {
-    fn random(rng: &mut Generator) -> Self {
-        [Color::Red, Color::Yellow, Color::Blue, Color::Green][rng.generate_range(0..4)]
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Block {
     x: usize,
     y: usize,
