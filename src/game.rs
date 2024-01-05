@@ -4,6 +4,9 @@ use crate::pathfinding::find_connected_sand;
 use crate::pathfinding::find_spanning_group;
 use derivative::Derivative;
 use enum_map::EnumMap;
+use graphics::ImageSize;
+use graphics::Transformed;
+use image::Rgb;
 use image::Rgba;
 use imageproc::drawing;
 use imageproc::rect::Rect;
@@ -21,11 +24,11 @@ use piston_window::prelude::*;
 pub struct Game {
     rng: WyRand,
     #[derivative(Debug = "ignore")]
-    glyph_cache: Glyphs,
+    text_textures: TextTextures,
     canvas: Canvas,
     sand: Array2<Option<Color>>,
     animation: Option<(f64, Animation)>,
-    paused: bool,
+    play_mode: PlayMode,
     elapsed_time: f64,
     next_move: f64,
     next_physics_update: f64,
@@ -38,19 +41,14 @@ impl Game {
     pub fn new(window: &mut PistonWindow) -> Self {
         Self {
             rng: WyRand::new(),
-            glyph_cache: Glyphs::from_bytes(
-                PIXEL_FONT,
-                window.create_texture_context(),
-                TextureSettings::new(),
-            )
-            .unwrap(),
+            text_textures: TextTextures::new(window),
             canvas: Canvas::new(window),
             sand: Array2::default([
                 window.size().width as usize / SAND_SIZE,
                 window.size().height as usize / SAND_SIZE,
             ]),
             animation: None,
-            paused: false,
+            play_mode: PlayMode::Playing,
             elapsed_time: 0.0,
             next_move: MOVE_DELAY,
             next_physics_update: 0.0,
@@ -62,8 +60,11 @@ impl Game {
 
     fn reset(&mut self) {
         self.sand.assign(&Array::from_elem(1, None));
+        self.animation = None;
+        self.play_mode = PlayMode::Playing;
         self.next_move = self.elapsed_time + MOVE_DELAY;
         self.next_physics_update = self.elapsed_time;
+        self.queue_drop = false;
         self.falling_block_pos = None;
     }
 
@@ -72,17 +73,23 @@ impl Game {
             match button {
                 Button::Keyboard(key) => match key {
                     Key::Left => {
-                        self.move_block(Direction::Left);
+                        if self.play_mode == PlayMode::Playing {
+                            self.move_block(Direction::Left);
+                        }
                         self.control_updates[Direction::Left] =
                             Some(self.elapsed_time + FIRST_INPUT_DELAY);
                     }
                     Key::Right => {
-                        self.move_block(Direction::Right);
+                        if self.play_mode == PlayMode::Playing {
+                            self.move_block(Direction::Right);
+                        }
                         self.control_updates[Direction::Right] =
                             Some(self.elapsed_time + FIRST_INPUT_DELAY);
                     }
                     Key::Down => {
-                        self.move_block(Direction::Down);
+                        if self.play_mode == PlayMode::Playing {
+                            self.move_block(Direction::Down);
+                        }
                         self.control_updates[Direction::Down] =
                             Some(self.elapsed_time + FIRST_INPUT_DELAY);
                     }
@@ -107,7 +114,7 @@ impl Game {
                         self.queue_drop = true;
                     }
                     Key::P => {
-                        self.paused = !self.paused;
+                        self.play_mode = self.play_mode.toggle_pause();
                     }
                     Key::R => {
                         self.reset();
@@ -154,7 +161,7 @@ impl Game {
     }
 
     pub fn update(&mut self, event: &UpdateArgs) {
-        if self.paused {
+        if self.play_mode != PlayMode::Playing {
             return;
         }
 
@@ -223,6 +230,9 @@ impl Game {
                         .generate::<Block>()
                         .with_pos(self.sand.dim().0 / 2 - 1, 0),
                 );
+                if !self.can_move(Direction::Down) {
+                    self.play_mode = PlayMode::GameOver
+                }
             }
             self.next_move += MOVE_DELAY;
         }
@@ -360,6 +370,13 @@ impl Game {
         );
     }
 
+    fn center_texture(sand_dims: (usize, usize), context: graphics::Context, texture: &G2dTexture) -> graphics::Context {
+        context.trans(
+            (sand_dims.0 * SAND_SIZE / 2 - texture.get_width() as usize / 2) as f64,
+            (sand_dims.1 * SAND_SIZE / 2 - texture.get_height() as usize/ 2) as f64,
+        )
+    }
+
     pub fn render(&mut self, context: graphics::Context, g: &mut G2d) {
         self.canvas.clear(Rgba([255, 255, 255, 255]));
         let buffer = self.canvas.image();
@@ -403,8 +420,23 @@ impl Game {
         }
 
         // Render paused text
-        if self.paused {
-            piston_window::Text::new(32).draw_pos("PAUSED", [32.0, 64.0], &mut self.glyph_cache, &Default::default(), context.transform, g).unwrap();
+        if self.play_mode == PlayMode::Paused {
+            let texture = self.text_textures.get_texture("PAUSED", 6, Rgb([0, 0, 0])).unwrap();
+            graphics::image(
+                texture,
+                Self::center_texture(self.sand.dim(), context, texture).transform,
+                g,
+            );
+        }
+
+        // Render game over text
+        if self.play_mode == PlayMode::GameOver {
+            let texture = self.text_textures.get_texture("GAME OVER", 6, Rgb([0, 0, 0])).unwrap();
+            graphics::image(
+                texture,
+                Self::center_texture(self.sand.dim(), context, texture).transform,
+                g,
+            );
         }
     }
 }
@@ -482,4 +514,21 @@ enum Animation {
         flash_state: bool,
         affected_pixels: Vec<(usize, usize)>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayMode {
+    Playing,
+    Paused,
+    GameOver,
+}
+
+impl PlayMode {
+    fn toggle_pause(&self) -> Self {
+        match self {
+            Self::Playing => Self::Paused,
+            Self::Paused => Self::Playing,
+            Self::GameOver => Self::GameOver,
+        }
+    }
 }
