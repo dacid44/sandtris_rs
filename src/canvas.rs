@@ -1,12 +1,12 @@
 use derivative::Derivative;
 use image::{Rgba, RgbaImage};
-use piston_window::prelude::*;
 use piston_window::graphics;
+use piston_window::prelude::*;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Canvas {
-    #[derivative(Debug="ignore")]
+    #[derivative(Debug = "ignore")]
     texture_context: G2dTextureContext,
     dims: (u32, u32),
     buffer: image::RgbaImage,

@@ -8,11 +8,15 @@ pub const BLOCK_SIZE: usize = 32;
 pub const SAND_SIZE: usize = 4;
 pub const SAND_BLOCK_SIZE: usize = BLOCK_SIZE / SAND_SIZE;
 pub const CLEAR_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+pub const TEXT_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 pub const MOVE_DELAY: f64 = 1.0 / 6.0;
 pub const FIRST_INPUT_DELAY: f64 = 0.1;
 pub const INPUT_DELAY: f64 = 1.0 / 60.0;
 pub const MOVE_REPEAT: usize = 2;
 pub const PHYSICS_DELAY: f64 = 1.0 / 30.0;
+pub const FLASH_DELAY: f64 = 1.0 / 4.0;
+
+pub const PIXEL_FONT: &'static [u8] = include_bytes!("../assets/Minimal3x5.ttf");
 
 #[rustfmt::skip]
 lazy_static! {
@@ -31,11 +35,11 @@ lazy_static! {
         ]).unwrap().reversed_axes(),
         Shape::I => Array2::from_shape_vec([4, 1], vec![
             true , true , true , true ,
-        ]).unwrap().reversed_axes(),
+        ]).unwrap(),
         Shape::O => Array2::from_shape_vec([2, 2], vec![
             true , true ,
             true , true ,
-        ]).unwrap().reversed_axes(),
+        ]).unwrap(),
     });
 }
 

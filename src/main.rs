@@ -10,7 +10,8 @@ fn main() {
     println!("Hello, world!");
 
     let opengl = OpenGL::V3_2;
-    let mut window: PistonWindow = WindowSettings::new("sandtris_rs", [384, 512])
+    // 12 * 18 blocks
+    let mut window: PistonWindow = WindowSettings::new("sandtris_rs", [384, 576])
         .exit_on_esc(true)
         .graphics_api(opengl)
         .build()

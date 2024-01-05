@@ -2,6 +2,7 @@ use crate::canvas::Canvas;
 use crate::constants::*;
 use crate::pathfinding::find_connected_sand;
 use crate::pathfinding::find_spanning_group;
+use derivative::Derivative;
 use enum_map::EnumMap;
 use image::Rgba;
 use imageproc::drawing;
@@ -15,15 +16,21 @@ use ndarray::Array2;
 use piston_window::graphics;
 use piston_window::prelude::*;
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Game {
     rng: WyRand,
+    #[derivative(Debug = "ignore")]
+    glyph_cache: Glyphs,
     canvas: Canvas,
     sand: Array2<Option<Color>>,
+    animation: Option<(f64, Animation)>,
+    paused: bool,
     elapsed_time: f64,
     next_move: f64,
     next_physics_update: f64,
     control_updates: EnumMap<Direction, Option<f64>>,
+    queue_drop: bool,
     falling_block_pos: Option<Block>,
 }
 
@@ -31,15 +38,24 @@ impl Game {
     pub fn new(window: &mut PistonWindow) -> Self {
         Self {
             rng: WyRand::new(),
+            glyph_cache: Glyphs::from_bytes(
+                PIXEL_FONT,
+                window.create_texture_context(),
+                TextureSettings::new(),
+            )
+            .unwrap(),
             canvas: Canvas::new(window),
             sand: Array2::default([
                 window.size().width as usize / SAND_SIZE,
                 window.size().height as usize / SAND_SIZE,
             ]),
+            animation: None,
+            paused: false,
             elapsed_time: 0.0,
             next_move: MOVE_DELAY,
             next_physics_update: 0.0,
             control_updates: Default::default(),
+            queue_drop: false,
             falling_block_pos: None,
         }
     }
@@ -87,6 +103,12 @@ impl Game {
                     Key::Down => {
                         self.control_updates[Direction::Down] = None;
                     }
+                    Key::Space => {
+                        self.queue_drop = true;
+                    }
+                    Key::P => {
+                        self.paused = !self.paused;
+                    }
                     Key::R => {
                         self.reset();
                     }
@@ -132,6 +154,28 @@ impl Game {
     }
 
     pub fn update(&mut self, event: &UpdateArgs) {
+        if self.paused {
+            return;
+        }
+
+        if self.run_animation(event.dt) {
+            // If we are in the middle of an animation, let run_animation() handle it, the game is
+            // effectively frozen
+            return;
+        } else if let Some((_, animation)) = self.animation.take() {
+            // The animation is complete, do whatever needs to be done now that the animation's
+            // finished
+            match animation {
+                Animation::RemoveLine {
+                    affected_pixels, ..
+                } => {
+                    for (px, py) in affected_pixels {
+                        self.sand[[px, py]] = None;
+                    }
+                }
+            }
+        }
+
         self.elapsed_time += event.dt;
 
         self.control_updates = self.control_updates.map(|input, update| {
@@ -143,15 +187,29 @@ impl Game {
             }
         });
 
+        if self.queue_drop {
+            while self.falling_block_pos.is_some() {
+                self.move_block(Direction::Down);
+            }
+            self.queue_drop = false;
+        }
+
         if self.elapsed_time >= self.next_physics_update {
             self.run_sand_physics();
             self.next_physics_update += PHYSICS_DELAY;
         }
 
         if let Some((x, y)) = find_spanning_group(&self.sand) {
-            for (px, py) in find_connected_sand(&self.sand, x, y) {
-                self.sand[[px, py]] = None;
-            }
+            self.animation = Some((
+                0.0,
+                Animation::RemoveLine {
+                    flash_state: false,
+                    affected_pixels: find_connected_sand(&self.sand, x, y),
+                },
+            ));
+            // for (px, py) in find_connected_sand(&self.sand, x, y) {
+            //     self.sand[[px, py]] = None;
+            // }
         }
 
         if self.elapsed_time >= self.next_move {
@@ -168,6 +226,30 @@ impl Game {
             }
             self.next_move += MOVE_DELAY;
         }
+    }
+
+    fn run_animation(&mut self, delta: f64) -> bool {
+        let Some((animation_ts, animation)) = &mut self.animation else {
+            return false;
+        };
+
+        *animation_ts += delta;
+
+        match animation {
+            Animation::RemoveLine { flash_state, .. } => {
+                *flash_state = if (..FLASH_DELAY).contains(animation_ts)
+                    || (FLASH_DELAY * 2.0..FLASH_DELAY * 3.0).contains(animation_ts)
+                {
+                    false
+                } else if *animation_ts <= FLASH_DELAY * 4.0 {
+                    true
+                } else {
+                    return false;
+                };
+            }
+        };
+
+        return true;
     }
 
     fn can_move(&self, direction: Direction) -> bool {
@@ -283,7 +365,25 @@ impl Game {
         let buffer = self.canvas.image();
 
         graphics::clear(CLEAR_COLOR, g);
-        for ((x, y), color) in self.sand.indexed_iter().filter_map(|(pos, pixel)| pixel.map(|p| (pos, p))) {
+        for ((x, y), color) in self
+            .sand
+            .indexed_iter()
+            .filter_map(|(pos, pixel)| pixel.map(|p| (pos, p)))
+        {
+            // TODO: Put this into the filter expression, maybe?
+            if let Some((
+                _,
+                Animation::RemoveLine {
+                    flash_state: false,
+                    affected_pixels,
+                },
+            )) = &self.animation
+            {
+                if affected_pixels.contains(&(x, y)) {
+                    continue;
+                }
+            }
+
             // buffer.put_pixel(x as u32, y as u32, Rgba([0, 255, 0, 255]));
             drawing::draw_filled_rect_mut(
                 buffer,
@@ -300,6 +400,11 @@ impl Game {
 
         if let Some(block) = self.falling_block_pos {
             block.render(context, g);
+        }
+
+        // Render paused text
+        if self.paused {
+            piston_window::Text::new(32).draw_pos("PAUSED", [32.0, 64.0], &mut self.glyph_cache, &Default::default(), context.transform, g).unwrap();
         }
     }
 }
@@ -369,4 +474,12 @@ impl<Generator: Rng<OUTPUT>, const OUTPUT: usize> RandomGen<Generator, OUTPUT> f
             color: rng.generate(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+enum Animation {
+    RemoveLine {
+        flash_state: bool,
+        affected_pixels: Vec<(usize, usize)>,
+    },
 }
