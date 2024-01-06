@@ -11,6 +11,7 @@ enum-map = "2.7.3"
 image = { version = "0.24.7", default-features = false }
 imageproc = "0.23.0"
 lazy_static = "1.4.0"
+lru = "0.12.1"
 nanorand = "0.7.0"
 ndarray = "0.15.6"
 pathfinding = "4.8.0"

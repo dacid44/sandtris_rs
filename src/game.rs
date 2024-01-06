@@ -6,7 +6,8 @@ use derivative::Derivative;
 use enum_map::EnumMap;
 use graphics::ImageSize;
 use graphics::Transformed;
-use image::Rgb;
+use image::GenericImage;
+use image::GenericImageView;
 use image::Rgba;
 use imageproc::drawing;
 use imageproc::rect::Rect;
@@ -35,6 +36,8 @@ pub struct Game {
     control_updates: EnumMap<Direction, Option<f64>>,
     queue_drop: bool,
     falling_block_pos: Option<Block>,
+    score: usize,
+    combo: usize,
 }
 
 impl Game {
@@ -43,10 +46,7 @@ impl Game {
             rng: WyRand::new(),
             text_textures: TextTextures::new(window),
             canvas: Canvas::new(window),
-            sand: Array2::default([
-                window.size().width as usize / SAND_SIZE,
-                window.size().height as usize / SAND_SIZE,
-            ]),
+            sand: Array2::default([BOARD_SIZE.0 / SAND_SIZE, BOARD_SIZE.1 / SAND_SIZE]),
             animation: None,
             play_mode: PlayMode::Playing,
             elapsed_time: 0.0,
@@ -55,6 +55,8 @@ impl Game {
             control_updates: Default::default(),
             queue_drop: false,
             falling_block_pos: None,
+            score: 0,
+            combo: 0,
         }
     }
 
@@ -66,6 +68,8 @@ impl Game {
         self.next_physics_update = self.elapsed_time;
         self.queue_drop = false;
         self.falling_block_pos = None;
+        self.score = 0;
+        self.combo = 1;
     }
 
     pub fn handle_event(&mut self, event: &Event) {
@@ -152,6 +156,7 @@ impl Game {
                         } else {
                             self.add_sand_block();
                             self.falling_block_pos = None;
+                            self.combo = 0;
                             break;
                         }
                     }
@@ -176,6 +181,8 @@ impl Game {
                 Animation::RemoveLine {
                     affected_pixels, ..
                 } => {
+                    self.combo += 1;
+                    self.score += affected_pixels.len() * self.combo;
                     for (px, py) in affected_pixels {
                         self.sand[[px, py]] = None;
                     }
@@ -214,9 +221,6 @@ impl Game {
                     affected_pixels: find_connected_sand(&self.sand, x, y),
                 },
             ));
-            // for (px, py) in find_connected_sand(&self.sand, x, y) {
-            //     self.sand[[px, py]] = None;
-            // }
         }
 
         if self.elapsed_time >= self.next_move {
@@ -311,7 +315,7 @@ impl Game {
     }
 
     fn run_sand_physics(&mut self) {
-        let last_sand = self.sand.clone();
+        // let last_sand = self.sand.clone();
         // The bottom line will not move so we can skip it, and not worry about the bottom edge
         // case
         for y in (0..self.sand.dim().1 - 1).rev() {
@@ -352,36 +356,105 @@ impl Game {
         }
     }
 
-    fn draw_block(
-        &self,
-        x: usize,
-        y: usize,
-        color: [f32; 4],
+    fn center_texture(
+        width: u32,
+        height: u32,
         context: graphics::Context,
-        g: &mut G2d,
-    ) {
-        let (x, y) = (x as f64, y as f64);
+        texture: &G2dTexture,
+    ) -> graphics::Context {
+        Self::center_texture_x(width, context, texture)
+            .trans(0.0, (height / 2 - texture.get_height() / 2) as f64)
+    }
+
+    fn center_texture_x(
+        width: u32,
+        context: graphics::Context,
+        texture: &G2dTexture,
+    ) -> graphics::Context {
+        context.trans((width / 2 - texture.get_width() / 2) as f64, 0.0)
+    }
+
+    fn draw_dashboard(&mut self, context: graphics::Context, g: &mut G2d) {
+        let ui_width = WINDOW_SIZE.0 - BOARD_SIZE.0 as u32;
+        let ui_height = WINDOW_SIZE.1 as u32;
+
+        let context = context.trans(BOARD_SIZE.0 as f64, 0.0);
+
+        // Draw background
         graphics::rectangle_from_to(
-            color,
-            [x, y],
-            [x + BLOCK_SIZE as f64, y + BLOCK_SIZE as f64],
+            UI_BACKGROUND_COLOR,
+            [0.0, 0.0],
+            [ui_width as f64, ui_height as f64],
             context.transform,
             g,
         );
-    }
 
-    fn center_texture(sand_dims: (usize, usize), context: graphics::Context, texture: &G2dTexture) -> graphics::Context {
-        context.trans(
-            (sand_dims.0 * SAND_SIZE / 2 - texture.get_width() as usize / 2) as f64,
-            (sand_dims.1 * SAND_SIZE / 2 - texture.get_height() as usize/ 2) as f64,
-        )
+        // Draw score
+        let score_texture = self
+            .text_textures
+            .get_texture(
+                &format!("{:0width$}", self.score, width = SCORE_DIGITS),
+                SCORE_SCALE,
+                TEXT_COLOR,
+            )
+            .unwrap();
+
+        let score_label_bg_height = SCORE_LABEL_SCALE as u32 * 9;
+        let score_text_bg_y = SCORE_Y + score_label_bg_height;
+        let score_bg_width = score_texture.get_width() + SCORE_SCALE as u32 * 2;
+        let score_bg_x = ui_width / 2 - score_bg_width / 2;
+        graphics::rectangle_from_to(
+            UI_ELEMENT_BG_COLOR,
+            [score_bg_x as f64, score_text_bg_y as f64],
+            [
+                (score_bg_x + score_bg_width) as f64,
+                (score_text_bg_y + 9 * SCORE_SCALE as u32) as f64,
+            ],
+            context.transform,
+            g,
+        );
+        graphics::image(
+            score_texture,
+            Self::center_texture_x(ui_width, context, score_texture)
+                .trans(0.0, score_text_bg_y as f64 + SCORE_SCALE as f64)
+                .transform,
+            g,
+        );
+
+        // Draw score label
+        let score_label_texture = self
+            .text_textures
+            .get_texture("SCORE", SCORE_LABEL_SCALE, TEXT_COLOR)
+            .unwrap();
+        let score_label_bg_width = score_label_texture.get_width() + SCORE_LABEL_SCALE as u32 * 2;
+
+        graphics::rectangle_from_to(
+            UI_ELEMENT_BG_COLOR,
+            [score_bg_x as f64, SCORE_Y as f64],
+            [
+                (score_bg_x + score_label_bg_width) as f64,
+                score_text_bg_y as f64,
+            ],
+            context.transform,
+            g,
+        );
+        graphics::image(
+            score_label_texture,
+            context
+                .trans(
+                    score_bg_x as f64 + SCORE_LABEL_SCALE as f64,
+                    SCORE_Y as f64 + SCORE_LABEL_SCALE as f64,
+                )
+                .transform,
+            g,
+        );
     }
 
     pub fn render(&mut self, context: graphics::Context, g: &mut G2d) {
         self.canvas.clear(Rgba([255, 255, 255, 255]));
         let buffer = self.canvas.image();
 
-        graphics::clear(CLEAR_COLOR, g);
+        // graphics::clear(CLEAR_COLOR, g);
         for ((x, y), color) in self
             .sand
             .indexed_iter()
@@ -401,7 +474,6 @@ impl Game {
                 }
             }
 
-            // buffer.put_pixel(x as u32, y as u32, Rgba([0, 255, 0, 255]));
             drawing::draw_filled_rect_mut(
                 buffer,
                 Rect::at((x * SAND_SIZE) as i32, (y * SAND_SIZE) as i32)
@@ -411,32 +483,65 @@ impl Game {
         }
         self.canvas.render(context, g);
 
-        // for ((x, y), _) in self.blocks.indexed_iter().filter(|(_, x)| **x) {
-        //     self.draw_block(x, y, [1.0, 0.0, 0.0, 1.0], context, g);
-        // }
-
         if let Some(block) = self.falling_block_pos {
             block.render(context, g);
         }
 
+        self.draw_dashboard(context, g);
+
         // Render paused text
         if self.play_mode == PlayMode::Paused {
-            let texture = self.text_textures.get_texture("PAUSED", 6, Rgb([0, 0, 0])).unwrap();
+            let texture = self
+                .text_textures
+                .get_texture("PAUSED", 6, TEXT_COLOR)
+                .unwrap();
             graphics::image(
                 texture,
-                Self::center_texture(self.sand.dim(), context, texture).transform,
+                Self::center_texture(
+                    (self.sand.dim().0 * SAND_SIZE) as u32,
+                    (self.sand.dim().1 * SAND_SIZE) as u32,
+                    context,
+                    texture,
+                )
+                .transform,
                 g,
             );
         }
 
         // Render game over text
         if self.play_mode == PlayMode::GameOver {
-            let texture = self.text_textures.get_texture("GAME OVER", 6, Rgb([0, 0, 0])).unwrap();
+            let texture = self
+                .text_textures
+                .get_texture("GAME OVER", 6, TEXT_COLOR)
+                .unwrap();
             graphics::image(
                 texture,
-                Self::center_texture(self.sand.dim(), context, texture).transform,
+                Self::center_texture(
+                    (self.sand.dim().0 * SAND_SIZE) as u32,
+                    (self.sand.dim().1 * SAND_SIZE) as u32,
+                    context,
+                    texture,
+                )
+                // .trans(0.0, texture.get_height() as f64 / -2.0)
+                .transform,
                 g,
             );
+            // let restart_texture = self
+            //     .text_textures
+            //     .get_texture("PRESS R TO RESTART", 6, TEXT_COLOR)
+            //     .unwrap();
+            // graphics::image(
+            //     restart_texture,
+            //     Self::center_texture(
+            //         (self.sand.dim().0 * SAND_SIZE) as u32,
+            //         (self.sand.dim().1 * SAND_SIZE) as u32,
+            //         context,
+            //         restart_texture,
+            //     )
+            //     .trans(0.0, restart_texture.get_height() as f64 / 2.0)
+            //     .transform,
+            //     g,
+            // )
         }
     }
 }

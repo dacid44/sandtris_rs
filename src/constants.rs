@@ -4,19 +4,24 @@ use image::{
     Luma, Rgb, Rgba, RgbaImage, SubImage,
 };
 use lazy_static::lazy_static;
+use lru::LruCache;
 use nanorand::{RandomGen, Rng};
 use ndarray::{Array2, ArrayView2};
 use piston_window::{G2dTexture, G2dTextureContext, PistonWindow, TextureSettings};
 use std::{
-    collections::{hash_map::Entry, HashMap},
     io::Cursor,
+    num::NonZeroUsize,
 };
 
+pub const WINDOW_SIZE: (u32, u32) = (600, 576);
+pub const BOARD_SIZE: (usize, usize) = (384, 576);
 pub const BLOCK_SIZE: usize = 32;
 pub const SAND_SIZE: usize = 4;
 pub const SAND_BLOCK_SIZE: usize = BLOCK_SIZE / SAND_SIZE;
 pub const CLEAR_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-pub const TEXT_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+pub const TEXT_COLOR: Rgb<u8> = Rgb([0, 0, 0]);
+pub const UI_BACKGROUND_COLOR: [f32; 4] = [89.0 / 255.0, 92.0 / 255.0, 102.0 / 255.0, 1.0];
+pub const UI_ELEMENT_BG_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 pub const MOVE_DELAY: f64 = 1.0 / 6.0;
 pub const FIRST_INPUT_DELAY: f64 = 0.1;
 pub const INPUT_DELAY: f64 = 1.0 / 60.0;
@@ -24,11 +29,14 @@ pub const MOVE_REPEAT: usize = 2;
 pub const PHYSICS_DELAY: f64 = 1.0 / 30.0;
 pub const FLASH_DELAY: f64 = 1.0 / 4.0;
 
-pub const PIXEL_FONT: &'static [u8] = include_bytes!("../assets/Minimal3x5.ttf");
+pub const SCORE_Y: u32 = 100;
+pub const SCORE_SCALE: usize = 4;
+pub const SCORE_LABEL_SCALE: usize = 3;
+pub const SCORE_DIGITS: usize = 6;
 
 #[rustfmt::skip]
 lazy_static! {
-    static ref SHAPES: EnumMap<Shape, Array2<bool>> = dbg!(enum_map! {
+    static ref SHAPES: EnumMap<Shape, Array2<bool>> = enum_map! {
         Shape::T => Array2::from_shape_vec([2, 3], vec![
             false, true, false,
             true , true, true ,
@@ -48,7 +56,7 @@ lazy_static! {
             true , true ,
             true , true ,
         ]).unwrap(),
-    });
+    };
 
     static ref PIXEL_FONT_SPRITES: GrayImage = ImageReader::with_format(
         Cursor::new(include_bytes!("../assets/font.png")),
@@ -137,29 +145,28 @@ pub enum Direction {
 
 pub struct TextTextures {
     texture_context: G2dTextureContext,
-    cache: HashMap<(String, usize, Rgb<u8>), G2dTexture>,
+    cache: LruCache<(String, usize, Rgb<u8>), G2dTexture>,
 }
 
 impl TextTextures {
     pub fn new(window: &mut PistonWindow) -> Self {
         Self {
             texture_context: window.create_texture_context(),
-            cache: HashMap::new(),
+            cache: LruCache::new(NonZeroUsize::new(64).unwrap()),
         }
     }
 
     pub fn get_texture(&mut self, text: &str, scale: usize, color: Rgb<u8>) -> Option<&G2dTexture> {
-        Some(match self.cache.entry((text.to_string(), scale, color)) {
-            Entry::Vacant(entry) => entry.insert(
+        self.cache
+            .try_get_or_insert((text.to_string(), scale, color), || {
                 G2dTexture::from_image(
                     &mut self.texture_context,
-                    &Self::generate_text_sprite(text, scale, color)?,
+                    &Self::generate_text_sprite(text, scale, color).ok_or(())?,
                     &TextureSettings::new(),
                 )
-                .ok()?,
-            ),
-            Entry::Occupied(entry) => entry.into_mut(),
-        })
+                .map_err(|_| ())
+            })
+            .ok()
     }
 
     fn get_sprite(c: char) -> Option<SubImage<&'static GrayImage>> {
@@ -172,6 +179,7 @@ impl TextTextures {
     }
 
     fn generate_text_sprite(text: &str, scale: usize, color: Rgb<u8>) -> Option<RgbaImage> {
+        // TODO: Add ability to add a background (with a border) to the rendered text
         let width = (text.len() * 5 + text.len() - 1) as u32;
         let mut buffer = GrayImage::from_pixel(width, 7, Luma([255]));
         for (i, c) in text.chars().enumerate() {

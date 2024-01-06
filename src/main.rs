@@ -6,12 +6,14 @@ mod pathfinding;
 
 use piston_window::prelude::*;
 
+use crate::constants::WINDOW_SIZE;
+
 fn main() {
     println!("Hello, world!");
 
     let opengl = OpenGL::V3_2;
     // 12 * 18 blocks
-    let mut window: PistonWindow = WindowSettings::new("sandtris_rs", [384, 576])
+    let mut window: PistonWindow = WindowSettings::new("sandtris_rs", WINDOW_SIZE)
         .exit_on_esc(true)
         .graphics_api(opengl)
         .build()
