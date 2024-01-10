@@ -36,15 +36,18 @@ pub struct Game {
     next_physics_update: f64,
     control_updates: EnumMap<Direction, Option<f64>>,
     queue_drop: bool,
-    falling_block_pos: Option<Block>,
+    falling_block: Option<Block>,
+    next_block: Block,
     score: usize,
     combo: usize,
 }
 
 impl Game {
     pub fn new(window: &mut PistonWindow) -> Self {
+        let mut rng = WyRand::new();
+        let next_block = rng.generate();
         Self {
-            rng: WyRand::new(),
+            rng,
             text_textures: TextTextures::new(window),
             canvas: Canvas::new(window),
             sand: Array2::default([BOARD_SIZE.0 / SAND_SIZE, BOARD_SIZE.1 / SAND_SIZE]),
@@ -55,7 +58,8 @@ impl Game {
             next_physics_update: 0.0,
             control_updates: Default::default(),
             queue_drop: false,
-            falling_block_pos: None,
+            falling_block: None,
+            next_block,
             score: 0,
             combo: 0,
         }
@@ -68,7 +72,8 @@ impl Game {
         self.next_move = self.elapsed_time + MOVE_DELAY;
         self.next_physics_update = self.elapsed_time;
         self.queue_drop = false;
-        self.falling_block_pos = None;
+        self.falling_block = None;
+        self.next_block = self.rng.generate();
         self.score = 0;
         self.combo = 1;
     }
@@ -136,27 +141,27 @@ impl Game {
             match direction {
                 Direction::Left => {
                     if let Some(block) = self
-                        .falling_block_pos
+                        .falling_block
                         .filter(|_| self.can_move(Direction::Left))
                     {
-                        self.falling_block_pos = Some(block.dec_x());
+                        self.falling_block = Some(block.dec_x());
                     }
                 }
                 Direction::Right => {
                     if let Some(block) = self
-                        .falling_block_pos
+                        .falling_block
                         .filter(|_| self.can_move(Direction::Right))
                     {
-                        self.falling_block_pos = Some(block.inc_x());
+                        self.falling_block = Some(block.inc_x());
                     }
                 }
                 Direction::Down => {
-                    if let Some(block) = self.falling_block_pos {
+                    if let Some(block) = self.falling_block {
                         if self.can_move(Direction::Down) {
-                            self.falling_block_pos = Some(block.inc_y())
+                            self.falling_block = Some(block.inc_y())
                         } else {
                             self.add_sand_block();
-                            self.falling_block_pos = None;
+                            self.falling_block = None;
                             self.combo = 0;
                             break;
                         }
@@ -203,7 +208,7 @@ impl Game {
         });
 
         if self.queue_drop {
-            while self.falling_block_pos.is_some() {
+            while self.falling_block.is_some() {
                 self.move_block(Direction::Down);
             }
             self.queue_drop = false;
@@ -225,15 +230,18 @@ impl Game {
         }
 
         if self.elapsed_time >= self.next_move {
-            if self.falling_block_pos.is_some() {
+            if self.falling_block.is_some() {
                 if self.control_updates[Direction::Down].is_none() {
                     self.move_block(Direction::Down);
                 }
             } else {
-                self.falling_block_pos = Some({
-                    let block = self.rng.generate::<Block>();
-                    block.with_pos(self.sand.dim().0 / 2 - block.width() * SAND_BLOCK_SIZE / 2, 0)
+                self.falling_block = Some({
+                    self.next_block.with_pos(
+                        self.sand.dim().0 / 2 - self.next_block.width() * SAND_BLOCK_SIZE / 2,
+                        0,
+                    )
                 });
+                self.next_block = self.rng.generate();
                 if !self.can_move(Direction::Down) {
                     self.play_mode = PlayMode::GameOver
                 }
@@ -267,7 +275,7 @@ impl Game {
     }
 
     fn can_move(&self, direction: Direction) -> bool {
-        if let Some(block) = self.falling_block_pos {
+        if let Some(block) = self.falling_block {
             match direction {
                 Direction::Left => {
                     // TODO: Check sand
@@ -305,7 +313,7 @@ impl Game {
     }
 
     fn add_sand_block(&mut self) {
-        if let Some(block) = self.falling_block_pos {
+        if let Some(block) = self.falling_block {
             for (px, py) in block.coords() {
                 self.sand
                     .slice_mut(s![px..px + SAND_BLOCK_SIZE, py..py + SAND_BLOCK_SIZE])
@@ -393,62 +401,69 @@ impl Game {
         // Draw score
         let score_texture = self
             .text_textures
-            .get_texture(
+            .texture_with_background(
                 &format!("{:0width$}", self.score, width = SCORE_DIGITS),
                 SCORE_SCALE,
                 TEXT_COLOR,
+                UI_ELEMENT_BG_COLOR,
             )
             .unwrap();
 
-        let score_label_bg_height = SCORE_LABEL_SCALE as u32 * 9;
-        let score_text_bg_y = SCORE_Y + score_label_bg_height;
-        let score_bg_width = score_texture.get_width() + SCORE_SCALE as u32 * 2;
-        let score_bg_x = ui_width / 2 - score_bg_width / 2;
-        graphics::rectangle_from_to(
-            UI_ELEMENT_BG_COLOR,
-            [score_bg_x as f64, score_text_bg_y as f64],
-            [
-                (score_bg_x + score_bg_width) as f64,
-                (score_text_bg_y + 9 * SCORE_SCALE as u32) as f64,
-            ],
-            context.transform,
-            g,
-        );
-        graphics::image(
-            score_texture,
-            Self::center_texture_x(ui_width, context, score_texture)
-                .trans(0.0, score_text_bg_y as f64 + SCORE_SCALE as f64)
-                .transform,
-            g,
-        );
+        let score_context =
+            Self::center_texture_x(ui_width, context, score_texture).trans(0.0, SCORE_Y as f64);
 
-        // Draw score label
+        graphics::image(score_texture, score_context.transform, g);
+
         let score_label_texture = self
             .text_textures
-            .get_texture("SCORE", SCORE_LABEL_SCALE, TEXT_COLOR)
+            .texture_with_background("SCORE", SCORE_LABEL_SCALE, TEXT_COLOR, UI_ELEMENT_BG_COLOR)
             .unwrap();
-        let score_label_bg_width = score_label_texture.get_width() + SCORE_LABEL_SCALE as u32 * 2;
 
-        graphics::rectangle_from_to(
-            UI_ELEMENT_BG_COLOR,
-            [score_bg_x as f64, SCORE_Y as f64],
-            [
-                (score_bg_x + score_label_bg_width) as f64,
-                score_text_bg_y as f64,
-            ],
-            context.transform,
-            g,
-        );
         graphics::image(
             score_label_texture,
-            context
-                .trans(
-                    score_bg_x as f64 + SCORE_LABEL_SCALE as f64,
-                    SCORE_Y as f64 + SCORE_LABEL_SCALE as f64,
-                )
+            score_context
+                .trans(0.0, -(score_label_texture.get_height() as f64))
                 .transform,
             g,
         );
+
+        // Draw next block display
+        let next_block_context = context.trans(
+            ui_width as f64 / 2.0 - NEXT_BLOCK_DISPLAY_WIDTH / 2.0,
+            NEXT_BLOCK_Y as f64,
+        );
+
+        let next_block_label_texture = self
+            .text_textures
+            .texture_with_background(
+                "NEXT",
+                NEXT_BLOCK_LABEL_SCALE,
+                TEXT_COLOR,
+                UI_ELEMENT_BG_COLOR,
+            )
+            .unwrap();
+        graphics::image(
+            next_block_label_texture,
+            next_block_context
+                .trans(0.0, -(next_block_label_texture.get_height() as f64))
+                .transform,
+            g,
+        );
+
+        graphics::rectangle_from_to(
+            UI_ELEMENT_BG_COLOR_FLOAT,
+            [0.0, 0.0],
+            [NEXT_BLOCK_DISPLAY_WIDTH, NEXT_BLOCK_DISPLAY_HEIGHT],
+            next_block_context.transform,
+            g,
+        );
+
+        let shape_context = next_block_context.trans(
+            NEXT_BLOCK_DISPLAY_WIDTH / 2.0 - (self.next_block.width() * BLOCK_SIZE) as f64 / 4.0,
+            NEXT_BLOCK_DISPLAY_HEIGHT / 2.0 - (self.next_block.height() * BLOCK_SIZE) as f64 / 4.0,
+        ).scale(0.5, 0.5);
+
+        self.next_block.render_origin(shape_context, g);
     }
 
     pub fn render(&mut self, context: graphics::Context, g: &mut G2d) {
@@ -484,7 +499,7 @@ impl Game {
         }
         self.canvas.render(context, g);
 
-        if let Some(block) = self.falling_block_pos {
+        if let Some(block) = self.falling_block {
             block.render(context, g);
         }
 
@@ -492,10 +507,7 @@ impl Game {
 
         // Render paused text
         if self.play_mode == PlayMode::Paused {
-            let texture = self
-                .text_textures
-                .get_texture("PAUSED", 6, TEXT_COLOR)
-                .unwrap();
+            let texture = self.text_textures.texture("PAUSED", 6, TEXT_COLOR).unwrap();
             graphics::image(
                 texture,
                 Self::center_texture(
@@ -513,7 +525,7 @@ impl Game {
         if self.play_mode == PlayMode::GameOver {
             let texture = self
                 .text_textures
-                .get_texture("GAME OVER", 6, TEXT_COLOR)
+                .texture("GAME OVER", 6, TEXT_COLOR)
                 .unwrap();
             graphics::image(
                 texture,
@@ -523,26 +535,26 @@ impl Game {
                     context,
                     texture,
                 )
-                // .trans(0.0, texture.get_height() as f64 / -2.0)
+                .trans(0.0, texture.get_height() as f64 / (-7.0 / 4.0))
                 .transform,
                 g,
             );
-            // let restart_texture = self
-            //     .text_textures
-            //     .get_texture("PRESS R TO RESTART", 6, TEXT_COLOR)
-            //     .unwrap();
-            // graphics::image(
-            //     restart_texture,
-            //     Self::center_texture(
-            //         (self.sand.dim().0 * SAND_SIZE) as u32,
-            //         (self.sand.dim().1 * SAND_SIZE) as u32,
-            //         context,
-            //         restart_texture,
-            //     )
-            //     .trans(0.0, restart_texture.get_height() as f64 / 2.0)
-            //     .transform,
-            //     g,
-            // )
+            let restart_texture = self
+                .text_textures
+                .texture("PRESS R TO RESTART", 3, TEXT_COLOR)
+                .unwrap();
+            graphics::image(
+                restart_texture,
+                Self::center_texture(
+                    (self.sand.dim().0 * SAND_SIZE) as u32,
+                    (self.sand.dim().1 * SAND_SIZE) as u32,
+                    context,
+                    restart_texture,
+                )
+                .trans(0.0, restart_texture.get_height() as f64 / (7.0 / 4.0))
+                .transform,
+                g,
+            )
         }
     }
 }
@@ -599,6 +611,13 @@ impl Block {
                 context.transform,
                 g,
             );
+        }
+    }
+
+    fn render_origin(&self, context: graphics::Context, g: &mut G2d) {
+        for (px, py) in self.shape.coords(0, 0) {
+            let (x, y) = ((px * SAND_SIZE) as f64, (py * SAND_SIZE) as f64);
+            graphics::rectangle_from_to(self.color.float_color(), [x, y], [x + BLOCK_SIZE as f64, y + BLOCK_SIZE as f64], context.transform, g);
         }
     }
 }

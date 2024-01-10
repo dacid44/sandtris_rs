@@ -8,10 +8,7 @@ use lru::LruCache;
 use nanorand::{RandomGen, Rng};
 use ndarray::{Array2, ArrayView2};
 use piston_window::{G2dTexture, G2dTextureContext, PistonWindow, TextureSettings};
-use std::{
-    io::Cursor,
-    num::NonZeroUsize,
-};
+use std::{io::Cursor, num::NonZeroUsize};
 
 pub const WINDOW_SIZE: (u32, u32) = (600, 576);
 pub const BOARD_SIZE: (usize, usize) = (384, 576);
@@ -19,9 +16,10 @@ pub const BLOCK_SIZE: usize = 32;
 pub const SAND_SIZE: usize = 4;
 pub const SAND_BLOCK_SIZE: usize = BLOCK_SIZE / SAND_SIZE;
 pub const CLEAR_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-pub const TEXT_COLOR: Rgb<u8> = Rgb([0, 0, 0]);
+pub const TEXT_COLOR: Rgba<u8> = Rgba([0, 0, 0, 255]);
 pub const UI_BACKGROUND_COLOR: [f32; 4] = [89.0 / 255.0, 92.0 / 255.0, 102.0 / 255.0, 1.0];
-pub const UI_ELEMENT_BG_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+pub const UI_ELEMENT_BG_COLOR: Rgba<u8> = Rgba([255, 255, 255, 255]);
+pub const UI_ELEMENT_BG_COLOR_FLOAT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 pub const MOVE_DELAY: f64 = 1.0 / 6.0;
 pub const FIRST_INPUT_DELAY: f64 = 0.1;
 pub const INPUT_DELAY: f64 = 1.0 / 60.0;
@@ -29,10 +27,14 @@ pub const MOVE_REPEAT: usize = 2;
 pub const PHYSICS_DELAY: f64 = 1.0 / 30.0;
 pub const FLASH_DELAY: f64 = 1.0 / 4.0;
 
-pub const SCORE_Y: u32 = 100;
+pub const SCORE_Y: u32 = 192;
 pub const SCORE_SCALE: usize = 4;
 pub const SCORE_LABEL_SCALE: usize = 3;
 pub const SCORE_DIGITS: usize = 6;
+pub const NEXT_BLOCK_Y: u32 = 48;
+pub const NEXT_BLOCK_DISPLAY_WIDTH: f64 = BLOCK_SIZE as f64 * 2.5;
+pub const NEXT_BLOCK_DISPLAY_HEIGHT: f64 = BLOCK_SIZE as f64 * 2.5;
+pub const NEXT_BLOCK_LABEL_SCALE: usize = 2;
 
 #[rustfmt::skip]
 lazy_static! {
@@ -60,7 +62,7 @@ lazy_static! {
 
     static ref PIXEL_FONT_SPRITES: GrayImage = ImageReader::with_format(
         Cursor::new(include_bytes!("../assets/font.png")),
-        ImageFormat::Png
+        ImageFormat::Png,
     )
         .decode()
         .unwrap()
@@ -145,7 +147,7 @@ pub enum Direction {
 
 pub struct TextTextures {
     texture_context: G2dTextureContext,
-    cache: LruCache<(String, usize, Rgb<u8>), G2dTexture>,
+    cache: LruCache<(String, usize, Rgba<u8>, Option<Rgba<u8>>), G2dTexture>,
 }
 
 impl TextTextures {
@@ -156,12 +158,31 @@ impl TextTextures {
         }
     }
 
-    pub fn get_texture(&mut self, text: &str, scale: usize, color: Rgb<u8>) -> Option<&G2dTexture> {
+    pub fn texture(&mut self, text: &str, scale: usize, color: Rgba<u8>) -> Option<&G2dTexture> {
         self.cache
-            .try_get_or_insert((text.to_string(), scale, color), || {
+            .try_get_or_insert((text.to_string(), scale, color, None), || {
                 G2dTexture::from_image(
                     &mut self.texture_context,
-                    &Self::generate_text_sprite(text, scale, color).ok_or(())?,
+                    &Self::generate_text_sprite(text, scale, color, None).ok_or(())?,
+                    &TextureSettings::new(),
+                )
+                .map_err(|_| ())
+            })
+            .ok()
+    }
+
+    pub fn texture_with_background(
+        &mut self,
+        text: &str,
+        scale: usize,
+        color: Rgba<u8>,
+        background: Rgba<u8>,
+    ) -> Option<&G2dTexture> {
+        self.cache
+            .try_get_or_insert((text.to_string(), scale, color, Some(background)), || {
+                G2dTexture::from_image(
+                    &mut self.texture_context,
+                    &Self::generate_text_sprite(text, scale, color, Some(background)).ok_or(())?,
                     &TextureSettings::new(),
                 )
                 .map_err(|_| ())
@@ -178,24 +199,47 @@ impl TextTextures {
         }
     }
 
-    fn generate_text_sprite(text: &str, scale: usize, color: Rgb<u8>) -> Option<RgbaImage> {
-        // TODO: Add ability to add a background (with a border) to the rendered text
-        let width = (text.len() * 5 + text.len() - 1) as u32;
-        let mut buffer = GrayImage::from_pixel(width, 7, Luma([255]));
+    fn generate_text_sprite(
+        text: &str,
+        scale: usize,
+        color: Rgba<u8>,
+        background: Option<Rgba<u8>>,
+    ) -> Option<RgbaImage> {
+        let offset = if background.is_some() { 1 } else { 0 };
+        let width = (text.len() * 5 + text.len() - 1) as u32 + offset * 2;
+        let mut buffer = GrayImage::from_pixel(width, 7 + offset * 2, Luma([255]));
         for (i, c) in text.chars().enumerate() {
             if c != ' ' {
-                imageops::replace(&mut buffer, &*Self::get_sprite(c)?, i as i64 * 6, 0);
+                imageops::replace(
+                    &mut buffer,
+                    &*Self::get_sprite(c)?,
+                    i as i64 * 6 + offset as i64,
+                    offset as i64,
+                );
             }
         }
 
-        let Rgb([r, g, b]) = color;
-        let colored_buffer =
-            imageproc::map::map_colors(&buffer, |Luma([a])| Rgba([r, g, b, 255 - a]));
+        let Rgba([text_r, text_g, text_b, text_a]) = color;
+        let Rgba([bg_r, bg_g, bg_b, bg_a]) = background.unwrap_or(Rgba([0, 0, 0, 0]));
+        let colored_buffer = imageproc::map::map_colors(&buffer, |Luma([scale])| {
+            Rgba([
+                scale_subpixel(text_r, bg_r, scale),
+                scale_subpixel(text_g, bg_g, scale),
+                scale_subpixel(text_b, bg_b, scale),
+                scale_subpixel(text_a, bg_a, scale),
+            ])
+        });
+
         Some(imageops::resize(
             &colored_buffer,
             width * scale as u32,
-            7 * scale as u32,
+            (7 + offset * 2) * scale as u32,
             imageops::FilterType::Nearest,
         ))
     }
+}
+
+fn scale_subpixel(text: u8, background: u8, scale: u8) -> u8 {
+    let scale = scale as u16;
+    ((text as u16 * (255 - scale) + background as u16 * scale) / 255) as u8
 }
