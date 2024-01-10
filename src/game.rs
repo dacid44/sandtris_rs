@@ -2,6 +2,7 @@ use crate::canvas::Canvas;
 use crate::constants::*;
 use crate::pathfinding::find_connected_sand;
 use crate::pathfinding::find_spanning_group;
+use crate::physics::run_rng_physics;
 use derivative::Derivative;
 use enum_map::EnumMap;
 use graphics::ImageSize;
@@ -229,11 +230,10 @@ impl Game {
                     self.move_block(Direction::Down);
                 }
             } else {
-                self.falling_block_pos = Some(
-                    self.rng
-                        .generate::<Block>()
-                        .with_pos(self.sand.dim().0 / 2 - 1, 0),
-                );
+                self.falling_block_pos = Some({
+                    let block = self.rng.generate::<Block>();
+                    block.with_pos(self.sand.dim().0 / 2 - block.width() * SAND_BLOCK_SIZE / 2, 0)
+                });
                 if !self.can_move(Direction::Down) {
                     self.play_mode = PlayMode::GameOver
                 }
@@ -318,42 +318,43 @@ impl Game {
         // let last_sand = self.sand.clone();
         // The bottom line will not move so we can skip it, and not worry about the bottom edge
         // case
-        for y in (0..self.sand.dim().1 - 1).rev() {
-            for x in 0..self.sand.dim().0 {
-                if self.sand[[x, y]].is_none() {
-                    continue;
-                }
-
-                // Check directly below
-                if self.sand[[x, y + 1]].is_none() {
-                    self.sand[[x, y + 1]] = self.sand[[x, y]];
-                    self.sand[[x, y]] = None;
-                    continue;
-                }
-            }
-
-            for x in 0..self.sand.dim().0 {
-                if self.sand[[x, y]].is_none() {
-                    continue;
-                }
-
-                // TODO: Make which direction the sand actually goes randomly decided
-
-                // Check bottom left
-                if x > 0 && self.sand[[x - 1, y + 1]].is_none() {
-                    self.sand[[x - 1, y + 1]] = self.sand[[x, y]];
-                    self.sand[[x, y]] = None;
-                    continue;
-                }
-
-                // Check bottom right
-                if x < self.sand.dim().0 - 1 && self.sand[[x + 1, y + 1]].is_none() {
-                    self.sand[[x + 1, y + 1]] = self.sand[[x, y]];
-                    self.sand[[x, y]] = None;
-                    continue;
-                }
-            }
-        }
+        // for y in (0..self.sand.dim().1 - 1).rev() {
+        //     for x in 0..self.sand.dim().0 {
+        //         if self.sand[[x, y]].is_none() {
+        //             continue;
+        //         }
+        //
+        //         // Check directly below
+        //         if self.sand[[x, y + 1]].is_none() {
+        //             self.sand[[x, y + 1]] = self.sand[[x, y]];
+        //             self.sand[[x, y]] = None;
+        //             continue;
+        //         }
+        //     }
+        //
+        //     for x in 0..self.sand.dim().0 {
+        //         if self.sand[[x, y]].is_none() {
+        //             continue;
+        //         }
+        //
+        //         // TODO: Make which direction the sand actually goes randomly decided
+        //
+        //         // Check bottom left
+        //         if x > 0 && self.sand[[x - 1, y + 1]].is_none() {
+        //             self.sand[[x - 1, y + 1]] = self.sand[[x, y]];
+        //             self.sand[[x, y]] = None;
+        //             continue;
+        //         }
+        //
+        //         // Check bottom right
+        //         if x < self.sand.dim().0 - 1 && self.sand[[x + 1, y + 1]].is_none() {
+        //             self.sand[[x + 1, y + 1]] = self.sand[[x, y]];
+        //             self.sand[[x, y]] = None;
+        //             continue;
+        //         }
+        //     }
+        // }
+        run_rng_physics(&mut self.rng, self.sand.view_mut());
     }
 
     fn center_texture(
